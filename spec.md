@@ -436,8 +436,20 @@ Each phase ends with working, tested functionality. GenAI is added **after** the
    - *Rationale checks:* it refers to the selected underwriter, mentions no one outside the shortlist, cites only complexity flags the application has, quotes only %/count figures that match the data, and uses no gendered or protected-attribute words.
    - *On failure:* one retry with the failed checks as feedback, then the rules top-1 is used. Every attempt is stored in `routing_decisions.verification`.
    - *Fairness by construction:* the LLM sees underwriter ids only, never names (a name can signal gender or ethnicity). Ids are swapped for names after verification.
-3. **Event-driven loop**: outbox consumer → notifications; sweeper for stuck `ROUTING`; re-route `UNROUTABLE` when capacity frees.
-4. **Self-improvement (hill-climbing) loop**: an eval set of outcomes drives bounded changes to weights and prompts. A change is kept only if the eval score improves, and every change is versioned and can be rolled back.
+3. **Event-driven loop** (done, `events.py`):
+   - *Events written atomically:* each event is written in the same transaction as its state change (transactional outbox). Intake itself emits `APPLICATION_SUBMITTED`, so a crash before routing can't lose an application.
+   - *Delivery:* at-least-once, using SQS-style visibility timeouts. Handlers are idempotent: the routing claim and notification dedup on event id make a redelivery a no-op.
+   - *Failures:* exponential backoff, then the event is dead-lettered as `FAILED` after 5 attempts.
+   - *Sweeper:* re-queues applications stuck in `ROUTING` past the lease.
+   - *Capacity freed:* `CAPACITY_FREED` re-routes the oldest `UNROUTABLE` application that the freed underwriter is eligible for.
+   - *Overrides:* the reason is mandatory, the target must pass hard filters unless forced (and forcing is recorded), and each override creates a new `MANUAL_OVERRIDE` decision plus an override record.
+4. **Self-improvement (hill-climbing) loop** (done, `learning.py`):
+   - *Metric update:* re-estimate each underwriter's SLA, turnaround and rework rates from outcomes. Estimates are pulled toward the configured baseline (pseudo-count 5) and need at least 3 outcomes.
+   - *Objective:* replay every completed application's original decision snapshot with the candidate weights. Each labelled underwriter earns its reward × its rank position (SLA met +1, missed −1, rework −0.5, overridden pick −1), minus a penalty when top-1 picks concentrate on one underwriter.
+   - *Search:* hill climbing with ±0.05 steps, bounded to ±0.15 per weight per cycle.
+   - *Acceptance gate:* the change must improve the training score **and** strictly improve the score on a chronological holdout (the latest 30%).
+   - *Versioning:* every candidate is stored in `weights_versions`, `activate_weights()` rolls back, and each decision records the `weights_version` it used.
+   - *Simulation result (`simulate.py`):* metrics converge toward the hidden truth (UW-007 0.82 → 0.53, true value 0.50). The weight candidate was rejected because the holdout score didn't improve. SLA hit rate on identical traffic went from 64.8% to 65.2%, a gain that comes from the metric update.
 
 ## 15. Open Questions / Decisions Needed
 1. **Tech stack** — e.g. Python + FastAPI + PostgreSQL, or Java/Spring Boot, or Node/TypeScript? Frontend needed?

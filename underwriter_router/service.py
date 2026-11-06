@@ -4,7 +4,8 @@ from __future__ import annotations
 from .config import settings
 from .db import Repository
 from .graph import build_graph
-from .models import AppStatus, LoanApplicationIn, RoutingResult
+from . import rules
+from .models import AppStatus, DecisionSource, LoanApplicationIn, OverrideReason, RoutingResult
 
 
 class RouterService:
@@ -42,6 +43,47 @@ class RouterService:
             rationale=r["rationale"], complexity=out.get("complexity"),
             fairness_signals=r.get("fairness_signals", {}), decision_id=r.get("decision_id"),
         )
+
+    # --- case lifecycle -------------------------------------------------------------
+    def complete_case(self, app_id: str, sla_met: bool, turnaround_hours: float, reworked: bool = False) -> str:
+        """Underwriter finished: frees capacity (emits CAPACITY_FREED) and records the learning outcome."""
+        return self.repo.complete_case(app_id, sla_met, turnaround_hours, reworked)
+
+    def override(
+        self, app_id: str, to_underwriter_id: str, actor_id: str, reason_code: OverrideReason,
+        reason_text: str, force: bool = False,
+    ) -> RoutingResult:
+        """Supervisor reassignment (spec §7.3). Reason is mandatory; target must pass hard filters unless
+        force=True, which is itself recorded. Produces a new MANUAL_OVERRIDE decision in the audit trail."""
+        if not reason_text or not reason_text.strip():
+            raise ValueError("override reason_text is mandatory")
+        reason_code = OverrideReason(reason_code)
+        app = self.repo.get_application(app_id)
+        if app is None or app.status != AppStatus.ASSIGNED:
+            raise ValueError(f"only ASSIGNED applications can be overridden (got {app and app.status.value})")
+        target = next((u for u in self.repo.list_underwriters() if u.id == to_underwriter_id), None)
+        if target is None:
+            raise ValueError(f"unknown underwriter {to_underwriter_id}")
+        problems = rules.check_eligibility(app, target)
+        if problems and not force:
+            raise ValueError(f"{to_underwriter_id} is not eligible: {', '.join(problems)}")
+        prev = self.repo.get_latest_decision(app_id)
+        rationale = (f"Reassigned from {prev['selected_underwriter_id']} to {target.name} ({target.id}) by "
+                     f"supervisor {actor_id}. Reason [{reason_code.value}]: {reason_text.strip()}"
+                     + (f" FORCED despite: {', '.join(problems)}." if problems else ""))
+        decision = {
+            "input_snapshot": prev["input_snapshot"], "rules_version": prev["rules_version"],
+            "weights_version": prev["weights_version"], "complexity": "override",
+            "eligible": prev["eligible_candidates"], "excluded": prev["excluded_candidates"],
+            "shortlist": prev["shortlist"], "verification": [], "selected_underwriter_id": target.id,
+            "decision_source": DecisionSource.MANUAL_OVERRIDE.value, "rationale": rationale,
+            "fairness_signals": {"protected_attrs_used": False, "override": True, "forced": bool(problems),
+                                 "eligibility_issues": problems},
+            "latency_ms": 0,
+        }
+        self.repo.override_assignment(app_id, target.id, actor_id, reason_code.value, reason_text.strip(),
+                                      forced=bool(problems), decision=decision)
+        return self.get_result(app_id)
 
     def get_result(self, app_id: str, duplicate: bool = False) -> RoutingResult:
         app = self.repo.get_application(app_id)

@@ -52,15 +52,37 @@ class Settings:
     sla_hours: dict = field(default_factory=lambda: {"URGENT": 4, "HIGH": 24, "NORMAL": 72})
 
 
+    # Event-driven loop
+    routing_lease_s: float = 120.0       # ROUTING longer than this => sweeper re-queues
+    event_visibility_s: float = 60.0     # claimed event re-appears if not acked in this time
+    event_max_attempts: int = 5          # then dead-letter (FAILED)
+    event_backoff_s: float = 2.0         # exponential: 2, 4, 8, ...
+
+    # Self-improvement (hill-climbing) loop
+    learn_min_samples: int = 20          # don't learn from tiny data
+    learn_holdout_ratio: float = 0.3     # chronological holdout (latest 30%)
+    learn_step: float = 0.05             # neighbour step per weight
+    learn_max_delta: float = 0.15        # max change of any weight per cycle (bounded update)
+    learn_max_iters: int = 25
+    learn_fairness_lambda: float = 0.5   # penalty on top-1 concentration
+    learn_prior_strength: float = 5.0    # pseudo-count shrinking observed metrics toward the prior
+
+
+WEIGHT_KEYS = ("skill", "load", "sla", "speed", "fairness")
+
+
 @dataclass(frozen=True)
 class Weights:
-    """Versioned scoring weights. The hill-climbing loop will produce new versions."""
+    """Versioned scoring weights. The hill-climbing loop produces new versions (stored in DB)."""
     version: str = "w-0.1"
     skill: float = 0.30
     load: float = 0.25
     sla: float = 0.20
     speed: float = 0.10
     fairness: float = 0.15
+
+    def as_dict(self) -> dict[str, float]:
+        return {k: getattr(self, k) for k in WEIGHT_KEYS}
 
 
 settings = Settings()

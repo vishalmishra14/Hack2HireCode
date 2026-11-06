@@ -52,5 +52,9 @@ Optional overrides: `SIMPLE_MODEL`, `COMPLEX_MODEL` (format `provider:model`, e.
 ## Roadmap
 - [x] Base loop: intake → eligibility → rank → GenAI pick → validated atomic assignment
 - [x] Verification loop: 9 deterministic checks on each GenAI pick and rationale; 1 retry with feedback, then rules fallback (`underwriter_router/verifier.py`)
-- [ ] Event-driven loop: outbox consumer, notifications, stuck-routing sweeper, capacity-freed re-routing
-- [ ] Self-improvement (hill-climbing) loop: outcomes → bounded weight/prompt updates, scored by eval, versioned
+- [x] Event-driven loop: transactional outbox, at-least-once delivery with idempotent handlers, retry/backoff/dead-letter, stuck-routing sweeper, capacity-freed re-routing, supervisor overrides with mandatory reason (`underwriter_router/events.py`)
+- [x] Self-improvement (hill-climbing) loop: metrics re-estimated from outcomes, weights hill-climbed by replaying past decisions, strict holdout gate, versioned + rollback (`underwriter_router/learning.py`)
+
+```bash
+.venv/Scripts/python -m underwriter_router.simulate   # both loops end to end + before/after A/B (~90 s)
+```

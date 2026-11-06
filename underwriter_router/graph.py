@@ -21,7 +21,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
 from . import optimizer, rules, verifier
-from .config import settings, weights
+from .config import Weights, settings
 from .db import CapacityExhausted, Repository
 from .models import (
     DecisionSource,
@@ -39,6 +39,7 @@ class RoutingState(TypedDict, total=False):
     application: LoanApplication
     underwriters: list[Underwriter]
     recent_counts: dict[str, int]
+    weights: Weights
     eligible: list[Underwriter]
     excluded: list[Exclusion]
     ranked: list[ScoredCandidate]
@@ -65,6 +66,7 @@ def build_graph(repo: Repository):
             "application": app,
             "underwriters": repo.list_underwriters(),
             "recent_counts": repo.recent_assignment_counts(settings.fairness_window),
+            "weights": repo.get_active_weights(),  # versioned; updated by the self-improvement loop
             "started_at": time.perf_counter(),
             "llm_choice": None,
             "llm_source": None,
@@ -78,7 +80,8 @@ def build_graph(repo: Repository):
 
     def rank(state: RoutingState) -> dict:
         ranked = rules.rank(
-            state["application"], state["eligible"], state["recent_counts"], settings.fairness_window, weights
+            state["application"], state["eligible"], state["recent_counts"], settings.fairness_window,
+            state["weights"],
         )
         shortlist = ranked[: settings.shortlist_size]
         complexity, reasons = rules.classify_complexity(state["application"], shortlist, settings)
@@ -169,7 +172,7 @@ def build_graph(repo: Repository):
                 "recent_counts": state["recent_counts"],
             },
             "rules_version": settings.rules_version,
-            "weights_version": weights.version,
+            "weights_version": state["weights"].version,
             "complexity": f"{state['complexity']}: {'; '.join(state['complexity_reasons'])}",
             "eligible": [c.model_dump() for c in ranked],
             "excluded": [e.model_dump() for e in state["excluded"]],

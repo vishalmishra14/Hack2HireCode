@@ -31,6 +31,15 @@ class AppStatus(str, Enum):
     ROUTING = "ROUTING"
     ASSIGNED = "ASSIGNED"
     UNROUTABLE = "UNROUTABLE"
+    COMPLETED = "COMPLETED"
+
+
+class OverrideReason(str, Enum):
+    EXPERTISE = "EXPERTISE"
+    WORKLOAD = "WORKLOAD"
+    CONFLICT_OF_INTEREST = "CONFLICT_OF_INTEREST"
+    CUSTOMER_REQUEST = "CUSTOMER_REQUEST"
+    OTHER = "OTHER"
 
 
 class DecisionSource(str, Enum):
