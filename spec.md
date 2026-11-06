@@ -415,7 +415,31 @@ Each phase ends with working, tested functionality. GenAI is added **after** the
 
 ---
 
-## 14. Open Questions / Decisions Needed
+## 14. Decisions Made (2026-11-06)
+| Topic | Decision |
+|---|---|
+| Language / runtime | Python 3.14, LangChain + **LangGraph** `StateGraph` as the agent loop |
+| Harness for complex decisions | **deepagents** `create_deep_agent` with read-only tools over the shortlist |
+| Simple decisions | Local **qwen3.5:2b** via Ollama (one structured-output call) |
+| Complex decisions | **Claude Sonnet 5.5** (`claude-sonnet-5-5`); Sonnet 4.5 is deprecated (end of life 2026-11-30) |
+| Simple vs. complex | Deterministic: complex if HIGH risk, amount ≥ 1M, ≥ 2 complexity flags, or URGENT. A close call alone stays simple |
+| Fallback chain | Claude Deep Agent → qwen → rules top-1 |
+| Skill matching | Loan type is a hard filter; complexity flags are scored (partial match allowed) |
+| Persistence | SQLite for now (unique partial index, `BEGIN IMMEDIATE`, conditional capacity update) |
+| Observability | LangSmith tracing, project `underwriter-router`, metadata per application |
+| Timeouts | qwen 45 s, Claude Deep Agent 90 s (spec's 3 s target revisited once on hosted models) |
+
+### Agent loops (build order)
+1. **Base loop** (done): §4 steps 1-5 as a LangGraph graph.
+2. **Verification loop** (done): the `verify` node runs between GenAI and commit.
+   - *Decision checks:* the pick is in the shortlist, confidence ≥ 0.5, the pick is still eligible against freshly re-read underwriter state, and its score is within 0.10 of the rules top-1.
+   - *Rationale checks:* it refers to the selected underwriter, mentions no one outside the shortlist, cites only complexity flags the application has, quotes only %/count figures that match the data, and uses no gendered or protected-attribute words.
+   - *On failure:* one retry with the failed checks as feedback, then the rules top-1 is used. Every attempt is stored in `routing_decisions.verification`.
+   - *Fairness by construction:* the LLM sees underwriter ids only, never names (a name can signal gender or ethnicity). Ids are swapped for names after verification.
+3. **Event-driven loop**: outbox consumer → notifications; sweeper for stuck `ROUTING`; re-route `UNROUTABLE` when capacity frees.
+4. **Self-improvement (hill-climbing) loop**: an eval set of outcomes drives bounded changes to weights and prompts. A change is kept only if the eval score improves, and every change is versioned and can be rolled back.
+
+## 15. Open Questions / Decisions Needed
 1. **Tech stack** — e.g. Python + FastAPI + PostgreSQL, or Java/Spring Boot, or Node/TypeScript? Frontend needed?
 2. **LLM provider & model** — which one is allowed for the assignment? Any on-prem requirement?
 3. **Sync vs. async routing** — should `POST /applications` return the assignment immediately (sync, within ~4 s) or just accept and notify later?

@@ -1,0 +1,10 @@
+anthropic>=2.6
+langchain>=1.4
+langchain-anthropic>=1.7
+langchain-ollama>=1.1
+langgraph>=1.2
+deepagents>=0.7
+langsmith>=0.14
+pydantic>=2.14
+python-dotenv>=1.0
+pytest>=8
